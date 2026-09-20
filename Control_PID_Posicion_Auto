@@ -1,0 +1,296 @@
+import tkinter as tk
+from tkinter import messagebox
+import serial
+import threading
+import time
+
+# CONFIGURACIÓN SERIAL
+PUERTO = "COM3"
+BAUDRATE = 9600
+
+# CONEXIÓN CON ARDUINO
+try:
+    arduino = serial.Serial(
+        PUERTO,
+        BAUDRATE,
+        timeout=1
+    )
+
+    time.sleep(2)
+
+except Exception as e:
+
+    arduino = None
+
+    print("No se pudo conectar con Arduino:")
+    print(e)
+
+# FUNCIONES
+def enviar_angulo():
+
+    try:
+
+        angulo = float(entradaAngulo.get())
+
+        if angulo < 0 or angulo > 360:
+
+            messagebox.showerror(
+                "Error",
+                "El ángulo debe estar entre 0 y 360°."
+            )
+            return
+
+        if arduino is not None:
+
+            comando = f"{angulo:.3f}\n"
+
+            arduino.write(
+                comando.encode()
+            )
+
+
+        labelDeseado.config(
+            text=f"{angulo:.3f}°"
+        )
+
+    except ValueError:
+        messagebox.showerror(
+            "Error",
+            "Introduce un número válido."
+        )
+
+def recibir_datos():
+
+    while True:
+
+        if arduino is not None:
+
+            try:
+
+                linea = arduino.readline().decode(
+                    "utf-8",
+                    errors="ignore"
+                ).strip()
+
+
+                if linea.startswith("Actual:"):
+
+                    datos = linea.split(",")
+
+
+                    actual = float(
+                        datos[0].split(":")[1]
+                    )
+
+                    deseado = float(
+                        datos[1].split(":")[1]
+                    )
+
+                    error = float(
+                        datos[2].split(":")[1]
+                    )
+
+
+                    # Actualizar interfaz
+                    ventana.after(
+                        0,
+                        actualizar_interfaz,
+                        actual,
+                        deseado,
+                        error
+                    )
+
+
+            except Exception as e:
+
+                print("Error:", e)
+
+        else:
+
+            time.sleep(0.1)
+
+
+def actualizar_interfaz(
+    actual,
+    deseado,
+    error
+):
+
+    labelActual.config(
+        text=f"{actual:.3f}°"
+    )
+
+    labelDeseado.config(
+        text=f"{deseado:.3f}°"
+    )
+
+    labelError.config(
+        text=f"{error:.3f}°"
+    )
+
+
+    if abs(error) <= 1:
+
+        labelEstado.config(
+            text="DETENIDO / OBJETIVO ALCANZADO"
+        )
+
+    else:
+
+        labelEstado.config(
+            text="MOVIENDO"
+        )
+
+
+def cerrar():
+
+    if arduino is not None:
+
+        arduino.close()
+
+    ventana.destroy()
+
+# INTERFAZ
+ventana = tk.Tk()
+
+ventana.title(
+    "Sistema de Seguimiento Solar"
+)
+
+ventana.geometry(
+    "500x500"
+)
+
+ventana.resizable(
+    False,
+    False
+)
+
+# TÍTULO
+titulo = tk.Label(
+    ventana,
+    text="SEGUIDOR SOLAR",
+    font=("Arial", 22, "bold")
+)
+
+titulo.pack(
+    pady=20
+)
+
+# ENTRADA
+labelEntrada = tk.Label(
+    ventana,
+    text="Ángulo deseado:",
+    font=("Arial", 14)
+)
+
+labelEntrada.pack()
+
+
+entradaAngulo = tk.Entry(
+    ventana,
+    font=("Arial", 18),
+    justify="center"
+)
+
+entradaAngulo.insert(
+    0,
+    "45.000"
+)
+
+entradaAngulo.pack(
+    pady=10
+)
+
+# BOTÓN
+botonEnviar = tk.Button(
+    ventana,
+    text="ENVIAR ÁNGULO",
+    font=("Arial", 14),
+    command=enviar_angulo
+)
+
+botonEnviar.pack(
+    pady=10
+)
+
+# ÁNGULO DESEADO
+tk.Label(
+    ventana,
+    text="Ángulo deseado",
+    font=("Arial", 13)
+).pack(
+    pady=(20, 0)
+)
+
+
+labelDeseado = tk.Label(
+    ventana,
+    text="0.000°",
+    font=("Arial", 24)
+)
+
+labelDeseado.pack()
+
+# ÁNGULO ACTUAL
+tk.Label(
+    ventana,
+    text="Ángulo actual",
+    font=("Arial", 13)
+).pack(
+    pady=(15, 0)
+)
+
+
+labelActual = tk.Label(
+    ventana,
+    text="0.000°",
+    font=("Arial", 24)
+)
+
+labelActual.pack()
+
+# ERROR
+tk.Label(
+    ventana,
+    text="Error",
+    font=("Arial", 13)
+).pack(
+    pady=(15, 0)
+)
+
+
+labelError = tk.Label(
+    ventana,
+    text="0.000°",
+    font=("Arial", 20)
+)
+
+labelError.pack()
+
+# ESTADO
+labelEstado = tk.Label(
+    ventana,
+    text="ESPERANDO",
+    font=("Arial", 14)
+)
+
+labelEstado.pack(
+    pady=20
+)
+
+# HILO DE RECEPCIÓN
+hilo = threading.Thread(
+    target=recibir_datos,
+    daemon=True
+)
+
+hilo.start()
+
+# CERRAR
+ventana.protocol(
+    "WM_DELETE_WINDOW",
+    cerrar
+)
+
+ventana.mainloop()
