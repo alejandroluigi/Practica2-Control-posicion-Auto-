@@ -1,0 +1,214 @@
+#include <Encoder.h>
+
+// ENCODER
+const int encoderA = 2;
+const int encoderB = 3;
+
+Encoder encoder(encoderA, encoderB);
+
+// IMPORTANTE:
+// Este valor debe representar las cuentas que entrega
+// encoder.read() por una vuelta completa.
+const float CUENTAS_POR_REVOLUCION = 512.0;
+
+// Posición inicial del encoder
+long posicionInicial = 0;
+
+// L298N
+const int pinPWM = 5;
+const int pinIN1 = 7;
+const int pinIN2 = 8;
+
+// POSICIÓN
+
+// Ángulo que queremos alcanzar
+float anguloDeseado = 0.0;
+
+// Ángulo actual
+float anguloActual = 0.0;
+
+// Error de posición
+float error = 0.0;
+float errorAnterior = 0.0;
+
+// PID
+// IMPORTANTE:
+// Estos valores NO son los mismos que los del PID
+// de velocidad. Hay que ajustarlos para posición.
+
+float Kp = 0.47;
+float Ki = 0.03;
+float Kd = 0.01;
+
+float integral = 0.0;
+float derivada = 0.0;
+
+float salidaPID = 0.0;
+
+// PWM
+float pwm = 0.0;
+
+// PWM mínimo para que el motor pueda vencer
+// la fricción.
+const int PWM_MINIMO = 60;
+
+// TIEMPO
+unsigned long tiempoAnterior = 0;
+
+// PID cada 10 ms
+const float dt = 0.008;
+
+// COMUNICACIÓN SERIAL
+String datoSerial = "";
+
+void setup() {
+  Serial.begin(9600);
+
+  // Encoder
+  posicionInicial = encoder.read();
+
+  // L298N
+  pinMode(pinPWM, OUTPUT);
+  pinMode(pinIN1, OUTPUT);
+  pinMode(pinIN2, OUTPUT);
+
+  // Motor detenido inicialmente
+  digitalWrite(pinIN1, LOW);
+  digitalWrite(pinIN2, LOW);
+
+  analogWrite(pinPWM, 0);
+
+  tiempoAnterior = millis();
+}
+
+void loop() {
+
+  while (Serial.available() > 0) {
+    char caracter = Serial.read();
+
+     if (caracter == '\n') {
+      float nuevoAngulo = datoSerial.toFloat();
+
+      // Limitar el ángulo
+      if (nuevoAngulo >= 0.0 && nuevoAngulo <= 360.0) {
+        anguloDeseado = nuevoAngulo;
+
+        // Reiniciar integral al cambiar objetivo
+        integral = 0.0;
+      }
+      datoSerial = "";
+
+     } else {
+      datoSerial += caracter;
+     }
+  }
+
+  unsigned long tiempoActual = millis();
+
+  // Ejecutar PID cada 10 ms
+  if (tiempoActual - tiempoAnterior >= 8) {
+    
+    tiempoAnterior = tiempoActual;
+
+    // 1. LEER POSICIÓN DEL ENCODER
+    long posicionActual = encoder.read();
+
+
+    // 2. CONVERTIR CUENTAS A GRADOS
+    long cuentas = posicionActual - posicionInicial;
+    anguloActual = (cuentas * 360.0) / CUENTAS_POR_REVOLUCION;
+
+    // 3. CALCULAR ERROR
+    error = anguloDeseado - anguloActual;
+    if (error <= 1.7 && error > 0){
+      anguloActual = anguloActual + (fabs(error));
+      error = anguloDeseado - anguloActual;
+    } else if ((error >= -1.7 && error < 0)) {
+      anguloActual = anguloActual - (fabs(error));
+      error = anguloDeseado - anguloActual;
+    }
+
+    // 4. ZONA MUERTA (TOLERANCIA ±1°)
+    if (abs(error) <= 0.001) {
+      // Estamos dentro de ±1°
+      detenerMotor();
+      integral = 0;
+
+    } else { // 5. CONTROL PID
+
+      // Integral
+      integral += error * dt;
+
+      // Anti-windup
+      if (integral > 100) {
+        integral = 100;
+      }
+
+      if (integral < -100) {
+        integral = -100;
+      }
+
+      // Derivada
+      derivada = (error - errorAnterior) / dt;
+
+      // PID
+      salidaPID =
+          (Kp * error) +
+          (Ki * integral) +
+          (Kd * derivada);
+
+
+      // PWM
+      pwm = abs(salidaPID);
+
+      if (pwm > 255) {
+        pwm = 255;
+      }
+
+      // PWM mínimo
+      if (pwm > 0 && pwm < PWM_MINIMO) {
+        pwm = PWM_MINIMO;
+      }
+
+      // 6. DIRECCIÓN
+      if (salidaPID > 0) {
+        // Girar hacia adelante
+        digitalWrite(pinIN1, HIGH);
+        digitalWrite(pinIN2, LOW);
+
+      } else {
+        // Girar hacia atrás
+        digitalWrite(pinIN1, LOW);
+        digitalWrite(pinIN2, HIGH);
+      }
+
+      // Aplicar PWM
+      analogWrite(pinPWM, (int)pwm);
+
+    }
+
+    // 7. GUARDAR ERROR
+    errorAnterior = error;
+
+    // 8. SERIAL PLOTTER
+    Serial.print("Actual:");
+    Serial.print(anguloActual, 3);
+
+    Serial.print(",Deseado:");
+    Serial.print(anguloDeseado, 3);
+
+    Serial.print(",Error:");
+    Serial.println(error,3);
+  }
+}
+
+// DETENER MOTOR
+void detenerMotor() {
+
+  analogWrite(pinPWM, 0);
+
+  digitalWrite(pinIN1, LOW);
+  digitalWrite(pinIN2, LOW);
+
+  pwm = 0;
+}
